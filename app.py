@@ -139,7 +139,11 @@ def document_pages(doc_id: str):
 def chat_page():
     selected_doc_id = (request.args.get('doc') or '').strip() or None
     selected_document = _get_document_or_404(selected_doc_id) if selected_doc_id else None
-    return render_template('chat.html', selected_document=selected_document)
+    return render_template(
+        'chat.html',
+        selected_document=selected_document,
+        chat_rag_top_k=CHAT_RAG_TOP_K,
+    )
 
 @app.route('/cpg-stemi')
 def cpg_stemi():

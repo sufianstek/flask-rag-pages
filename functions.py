@@ -9,6 +9,7 @@ from config import (
     BASE_DIR,
     GEMINI_MODEL,
     GEMINI_FALLBACK_MODELS,
+    OPENAI_MODEL,
     OLLAMA_MODEL,
     OLLAMA_BASE_URL,
 )
@@ -59,15 +60,42 @@ def _load_gemini_api_key() -> str:
     return ''
 
 
+def _load_openai_api_key() -> str:
+    key = os.getenv('OPENAI_API_KEY', '').strip()
+    if key:
+        return key
+
+    # Backward-compatible fallback from config.py constant.
+    try:
+        from config import OPENAI_API_KEY as configured_key  # local import to avoid stale values
+        configured_value = str(configured_key or '').strip()
+        if configured_value:
+            return configured_value
+    except Exception:
+        pass
+
+    return ''
+
+
+def _get_openai_base_url() -> str:
+    return os.getenv('OPENAI_BASE_URL', 'https://api.openai.com/v1').strip().rstrip('/')
+
+
 
 def _get_active_provider() -> str:
     if _load_gemini_api_key():
         return 'gemini'
+    if _load_openai_api_key():
+        return 'openai'
     return 'ollama'
 
 
 def _resolve_provider_order() -> list[str]:
-    return ['gemini', 'ollama']
+    if _load_gemini_api_key():
+        return ['gemini', 'openai', 'ollama']
+    if _load_openai_api_key():
+        return ['openai', 'ollama']
+    return ['ollama']
 
 
 def _build_rag_prompt(message: str, contexts: list[dict]) -> str:
@@ -172,6 +200,103 @@ def _gemini_stream_reply(message: str, history: list[dict] | None = None) -> Gen
     )
 
 
+def _build_openai_messages(message: str, history: list[dict] | None = None) -> list[dict]:
+    messages = []
+    for item in history or []:
+        role = str(item.get('role', '')).strip().lower()
+        text = str(item.get('content', '')).strip()
+        if not text:
+            continue
+        if role not in {'user', 'assistant', 'system'}:
+            role = 'assistant'
+        messages.append({'role': role, 'content': text})
+    messages.append({'role': 'user', 'content': message})
+    return messages
+
+
+def _openai_generate_reply(message: str, history: list[dict] | None = None) -> tuple[str, str]:
+    api_key = _load_openai_api_key()
+    if not api_key:
+        raise ValueError('OpenAI API key is missing. Set OPENAI_API_KEY or config.py')
+
+    response = requests.post(
+        f'{_get_openai_base_url()}/chat/completions',
+        headers={
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json',
+        },
+        json={
+            'model': OPENAI_MODEL,
+            'messages': _build_openai_messages(message=message, history=history),
+            'stream': False,
+        },
+        timeout=120,
+    )
+    response.raise_for_status()
+
+    data = response.json()
+    choices = data.get('choices') or []
+    content = str((choices[0] if choices else {}).get('message', {}).get('content', '')).strip()
+    if not content:
+        raise ValueError('OpenAI returned empty content')
+
+    model_name = str(data.get('model') or OPENAI_MODEL).strip() or OPENAI_MODEL
+    return content, model_name
+
+
+def _openai_stream_reply(message: str, history: list[dict] | None = None) -> Generator[str, None, str]:
+    api_key = _load_openai_api_key()
+    if not api_key:
+        raise ValueError('OpenAI API key is missing. Set OPENAI_API_KEY or config.py')
+
+    model_name = OPENAI_MODEL
+
+    with requests.post(
+        f'{_get_openai_base_url()}/chat/completions',
+        headers={
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json',
+        },
+        json={
+            'model': OPENAI_MODEL,
+            'messages': _build_openai_messages(message=message, history=history),
+            'stream': True,
+        },
+        timeout=300,
+        stream=True,
+    ) as response:
+        response.raise_for_status()
+
+        for line in response.iter_lines(decode_unicode=True):
+            if not line:
+                continue
+
+            raw_line = str(line).strip()
+            if not raw_line.startswith('data:'):
+                continue
+
+            payload = raw_line[5:].strip()
+            if payload == '[DONE]':
+                return model_name
+
+            try:
+                data = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+
+            reported_model = str(data.get('model') or '').strip()
+            if reported_model:
+                model_name = reported_model
+
+            choices = data.get('choices') or []
+            delta = (choices[0] if choices else {}).get('delta', {})
+            content = str(delta.get('content', '') or '')
+            if content:
+                yield content
+
+    return model_name
+
+
 
 
 def _ollama_generate_reply(message: str, history: list[dict] | None = None) -> tuple[str, str]:
@@ -256,6 +381,16 @@ def _generate_reply(message: str, history: list[dict] | None = None) -> tuple[st
                 errors.append(f'gemini={exc}')
                 continue
 
+        if provider == 'openai':
+            if not _load_openai_api_key():
+                continue
+            try:
+                reply, model_name = _openai_generate_reply(message=message, history=history)
+                return reply, {'provider': 'openai', 'model': model_name}
+            except Exception as exc:
+                errors.append(f'openai={exc}')
+                continue
+
         if provider == 'ollama':
             try:
                 reply, model_name = _ollama_generate_reply(message=message, history=history)
@@ -279,6 +414,16 @@ def _stream_reply(message: str, history: list[dict] | None = None) -> Generator[
                 return {'provider': 'gemini', 'model': model_name}
             except Exception as exc:
                 errors.append(f'gemini={exc}')
+                continue
+
+        if provider == 'openai':
+            if not _load_openai_api_key():
+                continue
+            try:
+                model_name = yield from _openai_stream_reply(message=message, history=history)
+                return {'provider': 'openai', 'model': model_name}
+            except Exception as exc:
+                errors.append(f'openai={exc}')
                 continue
 
         if provider == 'ollama':

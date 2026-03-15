@@ -10,7 +10,12 @@ import requests
 from google import genai
 from pypdf import PdfReader
 
-from config import GEMINI_EMBED_MODEL, OLLAMA_EMBED_MODEL, OLLAMA_BASE_URL
+from config import (
+    GEMINI_EMBED_MODEL,
+    OLLAMA_EMBED_MODEL,
+    OLLAMA_BASE_URL,
+    OPENAI_EMBED_MODEL,
+)
 
 
 @dataclass
@@ -110,10 +115,38 @@ def _load_gemini_key() -> str:
 
 
 
-def _resolve_embed_provider() -> str:
+def _load_openai_key() -> str:
+    key = os.getenv('OPENAI_API_KEY', '').strip()
+    if key:
+        return key
+
+    try:
+        from config import OPENAI_API_KEY as configured_key
+        configured_value = str(configured_key or '').strip()
+        if configured_value:
+            return configured_value
+    except Exception:
+        pass
+
+    return ''
+
+
+def _get_openai_base_url() -> str:
+    return os.getenv('OPENAI_BASE_URL', 'https://api.openai.com/v1').strip().rstrip('/')
+
+
+def _resolve_embed_provider_order() -> List[str]:
     if _load_gemini_key():
-        return 'gemini'
-    return 'ollama'
+        return ['gemini', 'openai', 'ollama']
+    if _load_openai_key():
+        return ['openai', 'ollama']
+    return ['ollama']
+
+
+def _get_preferred_available_provider() -> str:
+    """Return the currently preferred provider based on available credentials."""
+    order = _resolve_embed_provider_order()
+    return order[0] if order else 'ollama'
 
 
 def _embed_texts_gemini(texts: List[str], model_name: str, gemini_api_key: str = '') -> np.ndarray:
@@ -159,25 +192,89 @@ def _embed_texts_ollama(texts: List[str], model_name: str) -> np.ndarray:
     return np.asarray(all_emb, dtype=np.float32)
 
 
+def _embed_texts_openai(texts: List[str], model_name: str, openai_api_key: str = '') -> np.ndarray:
+    api_key = openai_api_key or _load_openai_key()
+    if not api_key:
+        raise ValueError('OpenAI API key is required for embedding')
+
+    all_emb: List[List[float]] = []
+    batch_size = 100
+    base_url = _get_openai_base_url()
+
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        response = requests.post(
+            f'{base_url}/embeddings',
+            headers={
+                'Authorization': f'Bearer {api_key}',
+                'Content-Type': 'application/json',
+            },
+            json={
+                'model': model_name,
+                'input': batch,
+            },
+            timeout=120,
+        )
+        response.raise_for_status()
+        data = response.json()
+        items = data.get('data') or []
+        if not isinstance(items, list) or not items:
+            raise ValueError('OpenAI returned empty embeddings')
+
+        # OpenAI includes index for each row; sorting keeps deterministic order.
+        items_sorted = sorted(items, key=lambda row: int(row.get('index', 0)))
+        for row in items_sorted:
+            emb = row.get('embedding')
+            if not emb:
+                raise ValueError('OpenAI returned a missing embedding row')
+            all_emb.append(emb)
+
+    return np.asarray(all_emb, dtype=np.float32)
+
+
 def _embed_texts(
     texts: List[str],
     model_name: str = '',
     gemini_api_key: str = '',
-) -> np.ndarray:
+    openai_api_key: str = '',
+) -> tuple[np.ndarray, str, str]:
     errors: List[str] = []
 
-    if _load_gemini_key() or gemini_api_key:
-        try:
-            target_model = (model_name or GEMINI_EMBED_MODEL).strip()
-            return _embed_texts_gemini(texts=texts, model_name=target_model, gemini_api_key=gemini_api_key)
-        except Exception as exc:
-            errors.append(f'gemini={exc}')
+    for provider in _resolve_embed_provider_order():
+        if provider == 'gemini':
+            try:
+                target_model = (model_name or GEMINI_EMBED_MODEL).strip()
+                vectors = _embed_texts_gemini(
+                    texts=texts,
+                    model_name=target_model,
+                    gemini_api_key=gemini_api_key,
+                )
+                return vectors, 'gemini', target_model
+            except Exception as exc:
+                errors.append(f'gemini={exc}')
+                continue
 
-    try:
-        target_model = (model_name or OLLAMA_EMBED_MODEL).strip()
-        return _embed_texts_ollama(texts=texts, model_name=target_model)
-    except Exception as exc:
-        errors.append(f'ollama={exc}')
+        if provider == 'openai':
+            try:
+                target_model = (model_name or OPENAI_EMBED_MODEL).strip()
+                vectors = _embed_texts_openai(
+                    texts=texts,
+                    model_name=target_model,
+                    openai_api_key=openai_api_key,
+                )
+                return vectors, 'openai', target_model
+            except Exception as exc:
+                errors.append(f'openai={exc}')
+                continue
+
+        if provider == 'ollama':
+            try:
+                target_model = (model_name or OLLAMA_EMBED_MODEL).strip()
+                vectors = _embed_texts_ollama(texts=texts, model_name=target_model)
+                return vectors, 'ollama', target_model
+            except Exception as exc:
+                errors.append(f'ollama={exc}')
+                continue
 
     raise ValueError(f'No embedding provider available. Errors: {"; ".join(errors)}')
 
@@ -189,6 +286,7 @@ def ingest_pdf_to_vectors(
     overlap: int = 40,
     model_name: str = "",
     gemini_api_key: str = "",
+    openai_api_key: str = "",
 ) -> IngestionResult:
     pdf = Path(pdf_path)
     if not pdf.exists():
@@ -207,16 +305,22 @@ def ingest_pdf_to_vectors(
         if not isinstance(chunks, list):
             chunks = []
 
-        index = faiss.read_index(str(index_path))
-        return IngestionResult(
-            pdf_path=str(pdf),
-            chunks_count=len(chunks),
-            vector_dimension=int(index.d),
-            index_path=str(index_path),
-            metadata_path=str(metadata_path),
-            provider=str(metadata.get('provider', 'unknown')),
-            model=str(metadata.get('model', 'unknown')),
-        )
+        stored_provider = str(metadata.get('provider', 'unknown')).strip().lower()
+        preferred_provider = _get_preferred_available_provider()
+
+        # Reuse only when provider matches current preferred available provider.
+        # If available provider changed (for example, ollama -> gemini), rebuild vectors.
+        if stored_provider == preferred_provider:
+            index = faiss.read_index(str(index_path))
+            return IngestionResult(
+                pdf_path=str(pdf),
+                chunks_count=len(chunks),
+                vector_dimension=int(index.d),
+                index_path=str(index_path),
+                metadata_path=str(metadata_path),
+                provider=str(metadata.get('provider', 'unknown')),
+                model=str(metadata.get('model', 'unknown')),
+            )
 
     pages = _extract_pdf_pages(pdf)
     records: List[Dict[str, str | int]] = []
@@ -237,10 +341,11 @@ def ingest_pdf_to_vectors(
         raise ValueError("No text chunks generated from PDF")
 
     chunk_texts = [str(item["chunk"]) for item in records]
-    vectors = _embed_texts(
+    vectors, selected_provider, selected_model = _embed_texts(
         texts=chunk_texts,
         model_name=model_name,
         gemini_api_key=gemini_api_key,
+        openai_api_key=openai_api_key,
     )
     vectors = _normalize_rows(vectors.astype(np.float32))
 
@@ -252,12 +357,6 @@ def ingest_pdf_to_vectors(
     index.add(np.asarray(vectors, dtype=np.float32))
 
     faiss.write_index(index, str(index_path))
-
-    selected_provider = _resolve_embed_provider()
-    selected_model = model_name or (
-        GEMINI_EMBED_MODEL if selected_provider == 'gemini'
-        else OLLAMA_EMBED_MODEL
-    )
 
     metadata = {
         "pdf": str(pdf),
@@ -287,6 +386,7 @@ def ingest_multiple_pdfs(
     overlap: int = 40,
     model_name: str = "",
     gemini_api_key: str = "",
+    openai_api_key: str = "",
 ) -> List[IngestionResult]:
     """Ingest a list of PDFs, writing one index per PDF into output_dir."""
     results: List[IngestionResult] = []
@@ -298,6 +398,7 @@ def ingest_multiple_pdfs(
             overlap=overlap,
             model_name=model_name,
             gemini_api_key=gemini_api_key,
+            openai_api_key=openai_api_key,
         )
         results.append(result)
     return results
@@ -315,6 +416,7 @@ def search_vectors(
     model_name: str = "",
     gemini_api_key: str = "",
     index_names: Optional[List[str]] = None,
+    openai_api_key: str = "",
 ) -> List[Dict[str, Any]]:
     """Search across one or more vector indexes.
 
@@ -324,6 +426,7 @@ def search_vectors(
         top_k: Number of top results to return (across all indexes combined).
         model_name: Embedding model name.
         gemini_api_key: Gemini API key.
+        openai_api_key: OpenAI API key.
         index_names: List of index stems to search (e.g. ['paedsprotocolv5']).
                      When None (default), all indexes in output_dir are searched.
     """
@@ -344,10 +447,11 @@ def search_vectors(
         raise FileNotFoundError("No vector indexes found. Run ingest first.")
 
     # Embed the query once
-    query_vector = _embed_texts(
+    query_vector, _, _ = _embed_texts(
         texts=[query],
         model_name=model_name,
         gemini_api_key=gemini_api_key,
+        openai_api_key=openai_api_key,
     )
     query_vector = _normalize_rows(query_vector.astype(np.float32))
 
