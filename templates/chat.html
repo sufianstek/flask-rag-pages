@@ -134,6 +134,8 @@
     const sourcePrevBtn = document.getElementById('source-prev-btn');
     const sourceNextBtn = document.getElementById('source-next-btn');
     const history = [];
+    const STREAM_RENDER_INTERVAL_MS = 25;
+    const STREAM_RENDER_CHARS_PER_TICK = 2;
     let currentSourcePage = null;
     let currentSourceName = null;
     let selectedDocId = null;
@@ -354,14 +356,64 @@
       chatBox.appendChild(row);
       chatBox.scrollTop = chatBox.scrollHeight;
 
+      const charQueue = [];
+      const drainResolvers = [];
+      let flushTimer = null;
+
+      function resolveDrain() {
+        while (drainResolvers.length > 0) {
+          const resolve = drainResolvers.shift();
+          resolve();
+        }
+      }
+
+      function startFlusher() {
+        if (flushTimer) return;
+        flushTimer = window.setInterval(() => {
+          if (charQueue.length === 0) {
+            window.clearInterval(flushTimer);
+            flushTimer = null;
+            resolveDrain();
+            return;
+          }
+
+          const slice = charQueue.splice(0, STREAM_RENDER_CHARS_PER_TICK);
+          bubble.textContent += slice.join('');
+          chatBox.scrollTop = chatBox.scrollHeight;
+        }, STREAM_RENDER_INTERVAL_MS);
+      }
+
       return {
         appendChunk(chunk) {
           if (!chunk) return;
-          bubble.textContent += chunk;
-          chatBox.scrollTop = chatBox.scrollHeight;
+          charQueue.push(...String(chunk));
+          startFlusher();
         },
         waitForDrain() {
-          return Promise.resolve();
+          if (charQueue.length === 0 && !flushTimer) {
+            return Promise.resolve();
+          }
+          return new Promise((resolve) => {
+            drainResolvers.push(resolve);
+          });
+        },
+        addModelInfo(modelInfo = {}) {
+          const provider = String(modelInfo.provider || '').trim();
+          const model = String(modelInfo.model || '').trim();
+          if (!provider && !model) return;
+
+          const meta = document.createElement('div');
+          meta.className = 'small text-muted mt-2';
+          if (provider && model) {
+            meta.textContent = `Provider: ${provider} | Model: ${model}`;
+          } else if (provider) {
+            meta.textContent = `Provider: ${provider}`;
+          } else {
+            meta.textContent = `Model: ${model}`;
+          }
+
+          row.appendChild(meta);
+          chatBox.scrollTop = chatBox.scrollHeight;
         },
         addSources(contexts = []) {
           if (!Array.isArray(contexts) || contexts.length === 0) return;
@@ -461,7 +513,11 @@
                   assistantMessage.appendChunk(chunk);
                 } else if (eventData.type === 'done') {
                   const contexts = Array.isArray(eventData.contexts) ? eventData.contexts : [];
+                  const modelInfo = (eventData.model_info && typeof eventData.model_info === 'object')
+                    ? eventData.model_info
+                    : {};
                   await assistantMessage.waitForDrain();
+                  assistantMessage.addModelInfo(modelInfo);
                   assistantMessage.addSources(contexts);
                   history.push({ role: 'assistant', content: reply.trim() });
                   streamDone = true;

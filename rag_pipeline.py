@@ -20,6 +20,8 @@ class IngestionResult:
     vector_dimension: int
     index_path: str
     metadata_path: str
+    provider: str
+    model: str
 
     def to_dict(self) -> Dict[str, str | int]:
         return {
@@ -28,6 +30,8 @@ class IngestionResult:
             "vector_dimension": self.vector_dimension,
             "index_path": self.index_path,
             "metadata_path": self.metadata_path,
+            "provider": self.provider,
+            "model": self.model,
         }
 
 
@@ -210,6 +214,8 @@ def ingest_pdf_to_vectors(
             vector_dimension=int(index.d),
             index_path=str(index_path),
             metadata_path=str(metadata_path),
+            provider=str(metadata.get('provider', 'unknown')),
+            model=str(metadata.get('model', 'unknown')),
         )
 
     pages = _extract_pdf_pages(pdf)
@@ -269,6 +275,8 @@ def ingest_pdf_to_vectors(
         vector_dimension=dimension,
         index_path=str(index_path),
         metadata_path=str(metadata_path),
+        provider=selected_provider,
+        model=selected_model,
     )
 
 

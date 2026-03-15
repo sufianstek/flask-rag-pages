@@ -120,7 +120,7 @@ def _get_models_to_try() -> list[str]:
     return [primary_model] + [m for m in fallback_models if m != primary_model]
 
 
-def _gemini_generate_reply(message: str, history: list[dict] | None = None) -> str:
+def _gemini_generate_reply(message: str, history: list[dict] | None = None) -> tuple[str, str]:
     client = _get_genai_client()
     contents = _build_contents(message, history)
     models_to_try = _get_models_to_try()
@@ -134,7 +134,7 @@ def _gemini_generate_reply(message: str, history: list[dict] | None = None) -> s
             )
             reply = (response.text or '').strip()
             if reply:
-                return reply
+                return reply, model_name
         except Exception as exc:
             last_error = exc
             continue
@@ -144,7 +144,7 @@ def _gemini_generate_reply(message: str, history: list[dict] | None = None) -> s
     )
 
 
-def _gemini_stream_reply(message: str, history: list[dict] | None = None):
+def _gemini_stream_reply(message: str, history: list[dict] | None = None) -> Generator[str, None, str]:
     client = _get_genai_client()
     contents = _build_contents(message, history)
     models_to_try = _get_models_to_try()
@@ -162,7 +162,7 @@ def _gemini_stream_reply(message: str, history: list[dict] | None = None):
                     emitted_any = True
                     yield text
             if emitted_any:
-                return
+                return model_name
         except Exception as exc:
             last_error = exc
             continue
@@ -174,7 +174,7 @@ def _gemini_stream_reply(message: str, history: list[dict] | None = None):
 
 
 
-def _ollama_generate_reply(message: str, history: list[dict] | None = None) -> str:
+def _ollama_generate_reply(message: str, history: list[dict] | None = None) -> tuple[str, str]:
     messages = []
     for item in history or []:
         role = str(item.get('role', '')).strip().lower()
@@ -200,10 +200,10 @@ def _ollama_generate_reply(message: str, history: list[dict] | None = None) -> s
     content = str(data.get('message', {}).get('content', '')).strip()
     if not content:
         raise ValueError('Ollama returned empty content')
-    return content
+    return content, OLLAMA_MODEL
 
 
-def _ollama_stream_reply(message: str, history: list[dict] | None = None) -> Generator[str, None, None]:
+def _ollama_stream_reply(message: str, history: list[dict] | None = None) -> Generator[str, None, str]:
     messages = []
     for item in history or []:
         role = str(item.get('role', '')).strip().lower()
@@ -239,10 +239,10 @@ def _ollama_stream_reply(message: str, history: list[dict] | None = None) -> Gen
                 yield content
 
             if data.get('done'):
-                return
+                return OLLAMA_MODEL
 
 
-def _generate_reply(message: str, history: list[dict] | None = None) -> str:
+def _generate_reply(message: str, history: list[dict] | None = None) -> tuple[str, dict[str, str]]:
     errors: list[str] = []
 
     for provider in _resolve_provider_order():
@@ -250,14 +250,16 @@ def _generate_reply(message: str, history: list[dict] | None = None) -> str:
             if not _load_gemini_api_key():
                 continue
             try:
-                return _gemini_generate_reply(message=message, history=history)
+                reply, model_name = _gemini_generate_reply(message=message, history=history)
+                return reply, {'provider': 'gemini', 'model': model_name}
             except Exception as exc:
                 errors.append(f'gemini={exc}')
                 continue
 
         if provider == 'ollama':
             try:
-                return _ollama_generate_reply(message=message, history=history)
+                reply, model_name = _ollama_generate_reply(message=message, history=history)
+                return reply, {'provider': 'ollama', 'model': model_name}
             except Exception as exc:
                 errors.append(f'ollama={exc}')
                 continue
@@ -265,7 +267,7 @@ def _generate_reply(message: str, history: list[dict] | None = None) -> str:
     raise ValueError(f'No provider available. Errors: {"; ".join(errors)}')
 
 
-def _stream_reply(message: str, history: list[dict] | None = None) -> Generator[str, None, None]:
+def _stream_reply(message: str, history: list[dict] | None = None) -> Generator[str, None, dict[str, str]]:
     errors: list[str] = []
 
     for provider in _resolve_provider_order():
@@ -273,16 +275,16 @@ def _stream_reply(message: str, history: list[dict] | None = None) -> Generator[
             if not _load_gemini_api_key():
                 continue
             try:
-                yield from _gemini_stream_reply(message=message, history=history)
-                return
+                model_name = yield from _gemini_stream_reply(message=message, history=history)
+                return {'provider': 'gemini', 'model': model_name}
             except Exception as exc:
                 errors.append(f'gemini={exc}')
                 continue
 
         if provider == 'ollama':
             try:
-                yield from _ollama_stream_reply(message=message, history=history)
-                return
+                model_name = yield from _ollama_stream_reply(message=message, history=history)
+                return {'provider': 'ollama', 'model': model_name}
             except Exception as exc:
                 errors.append(f'ollama={exc}')
                 continue

@@ -7,7 +7,7 @@ PDF_DIR = BASE_DIR / 'static' / 'pdf'
 VECTOR_DIR = BASE_DIR / 'vector_store'
 IS_GAE = os.getenv('GAE_ENV', '').strip().lower().startswith('standard')
 
-GEMINI_API_KEY = '' #leave empty to use ollama
+GEMINI_API_KEY = 'AIzaSyD73zcfaevhLxLHbc3ff09JmoYcSHpk7es' #leave empty to use ollama
 
 GEMINI_MODEL = 'gemini-2.0-flash'
 GEMINI_FALLBACK_MODELS = 'gemini-2.0-flash-lite,gemini-2.5-flash'

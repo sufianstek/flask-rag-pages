@@ -1,7 +1,7 @@
 {
   "pdf": "/home/automata-gpu/flask-rag-pages/static/pdf/cpg_stemi.pdf",
-  "model": "nomic-embed-text",
-  "provider": "ollama",
+  "model": "gemini-embedding-001",
+  "provider": "gemini",
   "chunk_size": 220,
   "overlap": 40,
   "chunks": [

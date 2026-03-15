@@ -247,7 +247,7 @@ def chat_api():
                 index_names=index_names,
             )
             grounded_message = _build_rag_prompt(message=message, contexts=contexts)
-        reply = _generate_reply(message=grounded_message, history=history)
+        reply, model_info = _generate_reply(message=grounded_message, history=history)
     except FileNotFoundError:
         return jsonify({
             'status': 'error',
@@ -261,6 +261,8 @@ def chat_api():
     return jsonify({
         'status': 'ok',
         'reply': reply,
+        'provider': model_info.get('provider'),
+        'model': model_info.get('model'),
         'doc_id': doc_id,
         'use_context': use_context,
         'contexts': contexts,
@@ -303,14 +305,23 @@ def chat_api_stream():
                     index_names=index_names,
                 )
                 grounded_message = _build_rag_prompt(message=message, contexts=contexts)
-            for chunk in _stream_reply(message=grounded_message, history=history):
-                yield _sse_message({'type': 'chunk', 'content': chunk})
+            model_info = {'provider': None, 'model': None}
+            stream = _stream_reply(message=grounded_message, history=history)
+            while True:
+                try:
+                    chunk = next(stream)
+                    yield _sse_message({'type': 'chunk', 'content': chunk})
+                except StopIteration as done:
+                    if isinstance(done.value, dict):
+                        model_info = done.value
+                    break
 
             yield _sse_message({
                 'type': 'done',
                 'doc_id': doc_id,
                 'use_context': use_context,
                 'contexts': contexts,
+                'model_info': model_info,
             })
         except FileNotFoundError:
             yield _sse_message({
