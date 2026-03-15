@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ document.title }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-GLhlTQ8iRABdZLl6O3oVMWSktQOp6b7In1Zl3/Jr59b6EGGoI1aFkw7cmDA6j6gD" crossorigin="anonymous">
+    <style>
+        body {
+            background-color: #7f848b;
+            padding-top: var(--top-nav-offset, 76px);
+            padding-bottom: 74px;
+        }
+
+        .chat-sticky-bar {
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 1100;
+            background: rgba(33, 37, 41, 0.95);
+            padding: 0.5rem 0.75rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .chat-sticky-inner {
+            max-width: 900px;
+            margin: 0 auto;
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+
+        .chat-sticky-inner input {
+            min-width: 0;
+        }
+
+        @media (max-width: 576px) {
+            #context-toggle-label {
+                padding-left: 0.5rem;
+                padding-right: 0.5rem;
+                font-size: 0.8rem;
+            }
+        }
+
+        @media (max-width: 991px) {
+            .chat-sticky-bar {
+                bottom: 0;
+            }
+        }
+
+        .page-slot {
+            max-width: 400px;
+            margin: 0 auto 0.75rem;
+            aspect-ratio: 400 / 565;
+            overflow: hidden;
+            border-radius: 8px;
+            background-color: rgba(255, 255, 255, 0.2);
+        }
+
+        .page-slot img {
+            display: block;
+            width: 100%;
+            height: auto;
+        }
+
+        .toolbar-label {
+            font-size: 0.95rem;
+            opacity: 0.95;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark fixed-top">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="{{ url_for('index') }}">Document Library</a>
+            <div class="d-flex align-items-center gap-2 ms-auto">
+                <span class="text-light toolbar-label d-none d-md-inline">{{ document.title }}</span>
+                <a
+                    class="btn btn-outline-info"
+                    href="{{ url_for('static', filename='pdf/' + document.id + '.pdf') }}"
+                    download
+                >Download PDF</a>
+                <div class="btn-group" role="group" aria-label="Zoom controls">
+                    <button class="btn btn-outline-light" type="button" onclick="zoomOut()">-</button>
+                    <button class="btn btn-outline-light" type="button" onclick="zoomIn()">+</button>
+                </div>
+                <a class="btn btn-secondary" href="{{ url_for('index') }}">Home</a>
+            </div>
+        </div>
+    </nav>
+
+    <main id="page-container" class="container-fluid py-3 text-center">
+        {% for file_name in document.page_files %}
+        <section class="page-slot">
+            <img
+                {% if loop.index <= 5 %}
+                src="{{ url_for('static', filename='pages/' + document.folder + '/' + file_name) }}"
+                {% else %}
+                data-src="{{ url_for('static', filename='pages/' + document.folder + '/' + file_name) }}"
+                loading="lazy"
+                {% endif %}
+                alt="{{ document.title }} page {{ loop.index }}"
+                width="400"
+                height="565"
+            >
+        </section>
+        {% endfor %}
+    </main>
+
+    <div class="chat-sticky-bar">
+        <form id="index-chat-form" class="chat-sticky-inner">
+            <input id="index-chat-input" class="form-control" type="text" placeholder="Ask in AI chat..." autocomplete="off">
+            <input id="index-context-toggle" class="btn-check" type="checkbox" autocomplete="off" checked>
+            <label id="context-toggle-label" class="btn btn-outline-light" for="index-context-toggle" title="Use retrieval context">Context</label>
+            <button class="btn btn-primary" type="submit">Chat</button>
+        </form>
+    </div>
+
+
+    <script>
+        function setTopNavOffset() {
+            var nav = document.querySelector('.navbar.fixed-top');
+            var offset = nav ? nav.offsetHeight + 12 : 76;
+            document.body.style.setProperty('--top-nav-offset', offset + 'px');
+        }
+
+        var currentZoom = null;
+        function getDefaultZoom() {
+            return window.innerWidth < 768 ? 0.75 : 2;
+        }
+
+        function applyZoom() {
+            document.getElementById('page-container').style.zoom = currentZoom;
+        }
+
+        function initZoom() {
+            if (currentZoom === null) {
+                currentZoom = getDefaultZoom();
+            }
+            applyZoom();
+        }
+
+        function zoomIn() {
+            if (currentZoom === null) {
+                currentZoom = getDefaultZoom();
+            }
+            currentZoom = Math.min(currentZoom + 0.25, 5);
+            applyZoom();
+        }
+
+        function zoomOut() {
+            if (currentZoom === null) {
+                currentZoom = getDefaultZoom();
+            }
+            currentZoom = Math.max(currentZoom - 0.25, 0.25);
+            applyZoom();
+        }
+
+        window.addEventListener('load', setTopNavOffset);
+        window.addEventListener('resize', setTopNavOffset);
+        window.addEventListener('load', initZoom);
+
+        (function() {
+            var lazyImages = document.querySelectorAll('img[data-src]');
+            if ('IntersectionObserver' in window) {
+                var observer = new IntersectionObserver(function(entries) {
+                    entries.forEach(function(entry) {
+                        if (entry.isIntersecting) {
+                            var img = entry.target;
+                            img.src = img.getAttribute('data-src');
+                            img.removeAttribute('data-src');
+                            observer.unobserve(img);
+                        }
+                    });
+                }, { rootMargin: '200% 0px' });
+
+                lazyImages.forEach(function(img) {
+                    observer.observe(img);
+                });
+            } else {
+                lazyImages.forEach(function(img) {
+                    img.src = img.getAttribute('data-src');
+                    img.removeAttribute('data-src');
+                });
+            }
+        })();
+
+        document.getElementById('index-chat-form').addEventListener('submit', function(event) {
+            event.preventDefault();
+            var prompt = (document.getElementById('index-chat-input').value || '').trim();
+            var useContext = document.getElementById('index-context-toggle').checked;
+            var target = '{{ url_for("chat_page") }}?doc={{ document.id|urlencode }}';
+            if (!useContext) {
+                target += '&context=0';
+            }
+            if (prompt) {
+                target += '&q=' + encodeURIComponent(prompt) + '&submit=1';
+            }
+            window.location.href = target;
+        });
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js" integrity="sha384-w76AqPfDkMBDXo30jS1Sgez6pr3x5MlQ1ZAGC+nuZB+EYdgRZgiwxhTBTkF7CXvN" crossorigin="anonymous"></script>
+</body>
+</html>

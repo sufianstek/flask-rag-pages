@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% if selected_document %}{{ selected_document.title }} Chat{% else %}Document Chat{% endif %}</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background: #f8f9fa; }
+    #chat-box {
+      height: 70vh;
+      overflow-y: auto;
+      background: #fff;
+      border: 1px solid #dee2e6;
+      border-radius: .5rem;
+      padding: 1rem;
+    }
+    .msg { margin-bottom: 1rem; }
+    .msg-user { text-align: right; }
+    .bubble {
+      display: inline-block;
+      max-width: 85%;
+      padding: .6rem .8rem;
+      border-radius: .6rem;
+      white-space: pre-wrap;
+    }
+    .bubble-user { background: #0d6efd; color: #fff; }
+    .bubble-assistant { background: #e9ecef; color: #212529; }
+    .sources {
+      margin-top: .5rem;
+      text-align: left;
+      max-width: 85%;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .source-item {
+      font-size: .85rem;
+      border: 1px solid #dee2e6;
+      border-radius: .4rem;
+      background: #fff;
+      padding: .45rem .55rem;
+      margin-bottom: .35rem;
+      cursor: pointer;
+    }
+    .source-item:hover {
+      background: #f8f9fa;
+    }
+    .loading-inline {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 44px;
+      min-width: 44px;
+    }
+    .loading-gif {
+      width: 32px;
+      height: 32px;
+      object-fit: contain;
+    }
+  </style>
+</head>
+<body>
+  <div class="container py-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h4 class="m-0">
+        {% if selected_document %}
+        {{ selected_document.title }} AI Chat
+        {% else %}
+        Document AI Chat
+        {% endif %}
+      </h4>
+      <a href="/" class="btn btn-outline-secondary btn">Back</a>
+    </div>
+
+    <div id="chat-box" class="mb-3"></div>
+
+    <form id="chat-form" class="d-flex gap-2">
+      <input id="message-input" class="form-control" type="text" placeholder="Ask something about this document..." autocomplete="off" required>
+      <input id="top-k-input" type="hidden" value="3">
+      <div id="loading-indicator" class="loading-inline d-none" aria-live="polite" aria-label="Generating response">
+        <img
+          class="loading-gif"
+          alt="Loading"
+          src="{{ url_for('static', filename='chat_loading.gif') }}"
+        >
+      </div>
+      <button id="send-btn" class="btn btn-primary btn-lg" type="submit">Send</button>
+    </form>
+    <div class="d-flex flex-wrap align-items-center gap-3 mt-2">
+      <div class="form-check mt-2">
+        <input class="form-check-input" type="checkbox" value="1" id="context-toggle" checked>
+        <label class="form-check-label" for="context-toggle">
+          Use retrieval context
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="sourceModal" tabindex="-1" aria-labelledby="sourceModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="sourceModalLabel">Source Page</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body" style="text-align: center;">
+          <h6>Use arrow keys to navigate <-- --></h6>
+          <img id="source-page-image" class="img-fluid rounded border d-none" alt="Source page image">
+          <div id="source-page-loading" class="text-muted small">Loading page image...</div>
+          <div id="source-page-error" class="text-danger small d-none">Unable to load this page image.</div>
+        </div>
+        <div class="modal-footer">
+          <button id="source-prev-btn" type="button" class="btn btn-outline-secondary">Previous</button>
+          <button id="source-next-btn" type="button" class="btn btn-outline-secondary">Next</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    const chatBox = document.getElementById('chat-box');
+    const form = document.getElementById('chat-form');
+    const input = document.getElementById('message-input');
+    const loadingIndicator = document.getElementById('loading-indicator');
+    const sendBtn = document.getElementById('send-btn');
+    const contextToggle = document.getElementById('context-toggle');
+    const sourceModalElement = document.getElementById('sourceModal');
+    const sourceModal = new bootstrap.Modal(sourceModalElement);
+    const sourceModalLabel = document.getElementById('sourceModalLabel');
+    const sourcePageImage = document.getElementById('source-page-image');
+    const sourcePageLoading = document.getElementById('source-page-loading');
+    const sourcePageError = document.getElementById('source-page-error');
+    const sourcePrevBtn = document.getElementById('source-prev-btn');
+    const sourceNextBtn = document.getElementById('source-next-btn');
+    const history = [];
+    let currentSourcePage = null;
+    let currentSourceName = null;
+    let selectedDocId = null;
+
+    function isContextEnabled() {
+      return Boolean(contextToggle && contextToggle.checked);
+    }
+
+    function updateUrlState() {
+      const params = new URLSearchParams(window.location.search);
+      if (selectedDocId) {
+        params.set('doc', selectedDocId);
+      }
+      if (isContextEnabled()) {
+        params.delete('context');
+      } else {
+        params.set('context', '0');
+      }
+      const nextQuery = params.toString();
+      const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}`;
+      window.history.replaceState({}, '', nextUrl);
+    }
+
+    window.addEventListener('load', () => {
+      const params = new URLSearchParams(window.location.search);
+      const initialPrompt = (params.get('q') || '').trim();
+      const shouldAutoSubmit = params.get('submit') === '1';
+      selectedDocId = getValidSource(params.get('doc'));
+      if (initialPrompt) {
+        input.value = initialPrompt;
+      }
+
+      const requestedContext = params.get('context');
+      if (requestedContext === '0' || requestedContext === 'false' || requestedContext === 'off') {
+        contextToggle.checked = false;
+      }
+
+      updateUrlState();
+
+
+      if (shouldAutoSubmit && initialPrompt) {
+        params.delete('submit');
+        const nextQuery = params.toString();
+        const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}`;
+        window.history.replaceState({}, '', nextUrl);
+        window.setTimeout(() => form.requestSubmit(), 0);
+      }
+    });
+
+    function getValidPage(page) {
+      const parsed = Number.parseInt(page, 10);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    }
+
+    function getValidSource(source) {
+      const normalized = String(source || '').trim();
+      return /^[a-zA-Z0-9_-]+$/.test(normalized) ? normalized : null;
+    }
+
+    function buildSourcePageImagePath(source, page) {
+      return `/static/pages/${encodeURIComponent(source)}_pages/${page}.webp`;
+    }
+
+    function renderSourcePage(page, source) {
+      const validPage = getValidPage(page);
+      const validSource = getValidSource(source);
+      sourceModalLabel.textContent = validPage ? `Source Page ${validPage}` : 'Source Page';
+      sourcePageImage.classList.add('d-none');
+      sourcePageError.classList.add('d-none');
+      sourcePageLoading.classList.remove('d-none');
+      sourcePrevBtn.disabled = !(validPage && validPage > 1);
+      sourceNextBtn.disabled = !(validPage && validSource);
+
+      if (!validPage) {
+        sourcePageLoading.classList.add('d-none');
+        sourcePageError.textContent = 'Invalid page number.';
+        sourcePageError.classList.remove('d-none');
+        return;
+      }
+
+      if (!validSource) {
+        sourcePageLoading.classList.add('d-none');
+        sourcePageError.textContent = 'Missing source document for this citation.';
+        sourcePageError.classList.remove('d-none');
+        return;
+      }
+
+      currentSourcePage = validPage;
+      currentSourceName = validSource;
+
+      sourcePageImage.onload = () => {
+        sourcePageLoading.classList.add('d-none');
+        sourcePageError.classList.add('d-none');
+        sourcePageImage.classList.remove('d-none');
+      };
+
+      sourcePageImage.onerror = () => {
+        sourcePageLoading.classList.add('d-none');
+        sourcePageImage.classList.add('d-none');
+        sourcePageError.textContent = `Image not found for page ${validPage}.`;
+        sourcePageError.classList.remove('d-none');
+      };
+
+      sourcePageImage.src = buildSourcePageImagePath(validSource, validPage);
+      sourcePageImage.alt = `Source page ${validPage}`;
+    }
+
+    function openSourceModal(page, source) {
+      renderSourcePage(page, source);
+      sourceModal.show();
+    }
+
+    function goToPreviousSourcePage() {
+      if (!currentSourcePage || currentSourcePage <= 1) return;
+      renderSourcePage(currentSourcePage - 1, currentSourceName);
+    }
+
+    function goToNextSourcePage() {
+      if (!currentSourcePage || !currentSourceName) return;
+      renderSourcePage(currentSourcePage + 1, currentSourceName);
+    }
+
+    function buildSourceLabel(index, page, preview) {
+      const maxLabelLength = 100;
+      const prefix = `[${index + 1}] Page ${page}: `;
+      const normalizedPreview = String(preview || '').trim();
+      const availablePreviewLength = Math.max(0, maxLabelLength - prefix.length);
+
+      if (normalizedPreview.length <= availablePreviewLength) {
+        return `${prefix}${normalizedPreview}`;
+      }
+
+      if (availablePreviewLength <= 0) {
+        return prefix.slice(0, maxLabelLength);
+      }
+
+      const trimmedPreview = normalizedPreview.slice(0, Math.max(0, availablePreviewLength - 1));
+      return `${prefix}${trimmedPreview}…`;
+    }
+
+    sourcePrevBtn.addEventListener('click', () => {
+      goToPreviousSourcePage();
+    });
+
+    sourceNextBtn.addEventListener('click', () => {
+      goToNextSourcePage();
+    });
+
+    sourceModalElement.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        goToPreviousSourcePage();
+      } else if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        goToNextSourcePage();
+      }
+    });
+
+    contextToggle.addEventListener('change', () => {
+      updateUrlState();
+    });
+
+    function appendMessage(role, text, contexts = []) {
+      const row = document.createElement('div');
+      row.className = `msg ${role === 'user' ? 'msg-user' : ''}`;
+
+      const bubble = document.createElement('div');
+      bubble.className = `bubble ${role === 'user' ? 'bubble-user' : 'bubble-assistant'}`;
+      bubble.textContent = text;
+
+      row.appendChild(bubble);
+
+      if (role === 'assistant' && Array.isArray(contexts) && contexts.length > 0) {
+        const sources = document.createElement('div');
+        sources.className = 'sources';
+
+        const title = document.createElement('div');
+        title.className = 'small text-muted mb-1';
+        title.textContent = 'Sources from PDF';
+        sources.appendChild(title);
+
+        contexts.forEach((context, index) => {
+          const item = document.createElement('div');
+          item.className = 'source-item';
+          item.setAttribute('role', 'button');
+          item.tabIndex = 0;
+
+          const page = context.page ?? '?';
+          const source = context.source ?? null;
+          const preview = String(context.preview || context.chunk || '').trim();
+          item.textContent = buildSourceLabel(index, page, preview);
+          item.addEventListener('click', () => openSourceModal(page, source));
+          item.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              openSourceModal(page, source);
+            }
+          });
+          sources.appendChild(item);
+        });
+
+        row.appendChild(sources);
+      }
+
+      chatBox.appendChild(row);
+      chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    function createAssistantMessage() {
+      const row = document.createElement('div');
+      row.className = 'msg';
+
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble bubble-assistant';
+      bubble.textContent = '';
+
+      row.appendChild(bubble);
+      chatBox.appendChild(row);
+      chatBox.scrollTop = chatBox.scrollHeight;
+
+      return {
+        appendChunk(chunk) {
+          if (!chunk) return;
+          bubble.textContent += chunk;
+          chatBox.scrollTop = chatBox.scrollHeight;
+        },
+        waitForDrain() {
+          return Promise.resolve();
+        },
+        addSources(contexts = []) {
+          if (!Array.isArray(contexts) || contexts.length === 0) return;
+
+          const sources = document.createElement('div');
+          sources.className = 'sources';
+
+          const title = document.createElement('div');
+          title.className = 'small text-muted mb-1';
+          title.textContent = 'Sources from PDF';
+          sources.appendChild(title);
+
+          contexts.forEach((context, index) => {
+            const item = document.createElement('div');
+            item.className = 'source-item';
+            item.setAttribute('role', 'button');
+            item.tabIndex = 0;
+
+            const page = context.page ?? '?';
+            const source = context.source ?? null;
+            const preview = String(context.preview || context.chunk || '').trim();
+            item.textContent = buildSourceLabel(index, page, preview);
+            item.addEventListener('click', () => openSourceModal(page, source));
+            item.addEventListener('keydown', (event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                openSourceModal(page, source);
+              }
+            });
+            sources.appendChild(item);
+          });
+
+          row.appendChild(sources);
+          chatBox.scrollTop = chatBox.scrollHeight;
+        }
+      };
+    }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+
+      const message = input.value.trim();
+      if (!message) return;
+      const topK = 2;
+
+      appendMessage('user', message);
+      history.push({ role: 'user', content: message });
+      input.value = '';
+      sendBtn.disabled = true;
+      loadingIndicator.classList.remove('d-none');
+
+      try {
+        const response = await fetch('/api/chat/stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message,
+            history: history.slice(0, -1),
+            top_k: topK,
+            doc_id: selectedDocId,
+            use_context: isContextEnabled(),
+          })
+        });
+
+        if (!response.ok || !response.body) {
+          const data = await response.json().catch(() => ({}));
+          const errorText = data.message || 'Chat request failed';
+          appendMessage('assistant', `Error: ${errorText}`);
+          return;
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        const assistantMessage = createAssistantMessage();
+        let buffer = '';
+        let reply = '';
+        let streamDone = false;
+
+        while (!streamDone) {
+          const { value, done } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          let boundaryIndex = buffer.indexOf('\n\n');
+          while (boundaryIndex !== -1) {
+            const rawEvent = buffer.slice(0, boundaryIndex).trim();
+            buffer = buffer.slice(boundaryIndex + 2);
+
+            if (rawEvent.startsWith('data: ')) {
+              const jsonPart = rawEvent.slice(6).trim();
+              try {
+                const eventData = JSON.parse(jsonPart);
+                if (eventData.type === 'chunk') {
+                  const chunk = String(eventData.content || '');
+                  reply += chunk;
+                  assistantMessage.appendChunk(chunk);
+                } else if (eventData.type === 'done') {
+                  const contexts = Array.isArray(eventData.contexts) ? eventData.contexts : [];
+                  await assistantMessage.waitForDrain();
+                  assistantMessage.addSources(contexts);
+                  history.push({ role: 'assistant', content: reply.trim() });
+                  streamDone = true;
+                } else if (eventData.type === 'error') {
+                  const messageText = String(eventData.message || 'Chat request failed');
+                  if (!reply) {
+                    assistantMessage.appendChunk(`Error: ${messageText}`);
+                  }
+                  streamDone = true;
+                }
+              } catch {
+                assistantMessage.appendChunk('');
+              }
+            }
+
+            boundaryIndex = buffer.indexOf('\n\n');
+          }
+        }
+      } catch (error) {
+        appendMessage('assistant', `Error: ${error.message}`);
+      } finally {
+        loadingIndicator.classList.add('d-none');
+        sendBtn.disabled = false;
+        input.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
