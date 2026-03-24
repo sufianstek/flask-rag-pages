@@ -10,12 +10,11 @@ IS_GAE = os.getenv('GAE_ENV', '').strip().lower().startswith('standard')
 # Leave empty to skip Gemini; runtime fallback order is Gemini -> OpenAI -> Ollama.
 # run flask ingest-pdf once to populate vector store before using the app and every time change provider.
 GEMINI_API_KEY = '' 
-OPENAI_API_KEY = ''
-
 GEMINI_MODEL = 'gemini-2.0-flash'
 GEMINI_FALLBACK_MODELS = 'gemini-2.0-flash-lite,gemini-2.5-flash'
 GEMINI_EMBED_MODEL = 'gemini-embedding-001'
 
+OPENAI_API_KEY = ''
 OPENAI_MODEL = 'gpt-4.1-mini'
 OPENAI_EMBED_MODEL = 'text-embedding-3-small'
 

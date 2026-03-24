@@ -23,25 +23,46 @@ Flask app to browse PDF pages and chat with RAG grounded on those PDFs.
 ```bash
 git clone https://github.com/sufianstek/flask-rag-pages.git
 cd flask-rag-pages
+```
 
+### Linux/macOS
+
+```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-
-# choose one key (or use local Ollama without keys)
-export GEMINI_API_KEY="your_key"
-# export OPENAI_API_KEY="your_key"
-
-flask --app app ingest-pdf
-flask --app app run --debug
 ```
+
+### Windows (Command Prompt)
+
+```bat
+py -m venv .venv
+.venv\Scripts\activate.bat
+pip install -r requirements.txt
+```
+
+set API_KEY in config.py
+if no API_KEY was set, default to Ollama
+
+## Get API or Set up Ollama
+
+1. Gemini API key https://aistudio.google.com/
+2. OpenAI API key https://platform.openai.com/api-keys
+3. Set up Ollama https://ollama.com/download
+
+Create document vector and run app
+```bash
+flask ingest-pdf
+flask run --debug
+```
+
 
 Open `http://127.0.0.1:5000`.
 
 ## Basic Usage
 
 1. Place PDFs in `static/pdf/`.
-2. Run `flask --app app ingest-pdf`.
+2. Run `flask ingest-pdf`.
 3. Browse documents at `/`.
 4. Chat at `/chat`.
 
@@ -54,3 +75,4 @@ Generated outputs:
 
 - Provider order: Gemini -> OpenAI -> Ollama
 - Keep API keys out of source control
+- Run flask ingest-pdf when new inserted into pdf folder
