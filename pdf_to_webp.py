@@ -20,7 +20,7 @@ Example:
 import sys
 import os
 import re
-from pdf2image import convert_from_path
+from pdf2image import convert_from_path, pdfinfo_from_path
 
 
 def make_safe_filename(name):
@@ -61,6 +61,14 @@ def ensure_safe_pdf_filename(pdf_path):
     print(f"Renamed: {base_name} -> {os.path.basename(target_path)}")
     return target_path
 
+
+def count_existing_webp_pages(output_folder):
+    """Return the number of existing WebP page files in a folder."""
+    if not os.path.isdir(output_folder):
+        return 0
+
+    return sum(1 for name in os.listdir(output_folder) if name.lower().endswith(".webp"))
+
 def pdf_to_webp_folder(pdf_path, dpi=200):
     """
     Convert PDF to WebP format with all pages in a folder
@@ -85,33 +93,56 @@ def pdf_to_webp_folder(pdf_path, dpi=200):
         folder_name = f"{filename}_pages"
         output_folder = os.path.join(output_root, folder_name)
 
-        # Skip if folder already exists, assuming it was already converted.
-        if os.path.isdir(output_folder):
-            print(f"Skipping {pdf_path}: output folder already exists ({output_folder})")
-            return None
+        # Read page count first so conversion can be resumed safely.
+        pdf_info = pdfinfo_from_path(pdf_path)
+        total_pages = int(pdf_info.get("Pages", 0))
+
+        if total_pages <= 0:
+            raise ValueError("No pages found in PDF file")
 
         # Create the folder if it doesn't exist
         os.makedirs(output_folder, exist_ok=True)
-        print(f"Created folder: {output_folder}")
+        existing_pages = count_existing_webp_pages(output_folder)
+        if existing_pages == 0:
+            print(f"Created folder: {output_folder}")
 
-        # Convert PDF to list of PIL Images
+        if existing_pages >= total_pages:
+            print(
+                f"Skipping {pdf_path}: output folder already contains {existing_pages} page images "
+                f"({output_folder})"
+            )
+            return None
+
+        if existing_pages > 0:
+            print(
+                f"Resuming {pdf_path}: found {existing_pages}/{total_pages} existing page images "
+                f"in {output_folder}"
+            )
+
         print(f"Converting {pdf_path} to images...")
-        pages = convert_from_path(pdf_path, dpi=dpi)
-
-        if not pages:
-            raise ValueError("No pages found in PDF file")
-
-        # Save each page as WebP with numbered filenames
-        print(f"Saving pages as WebP files in {output_folder}")
-        for i, page in enumerate(pages):
-            # Create filename with zero-padded page number
-            webp_filename = f"{i+1}.webp"
+        for page_number in range(1, total_pages + 1):
+            webp_filename = f"{page_number}.webp"
             webp_path = os.path.join(output_folder, webp_filename)
-            # Save with 30% quality
+
+            if os.path.exists(webp_path):
+                continue
+
+            page_images = convert_from_path(
+                pdf_path,
+                dpi=dpi,
+                first_page=page_number,
+                last_page=page_number,
+            )
+
+            if not page_images:
+                raise ValueError(f"No image returned for page {page_number}")
+
+            page = page_images[0]
             page.save(webp_path, 'WEBP', quality=30)
+            page.close()
             print(f"Saved: {webp_filename}")
 
-        print(f"Successfully converted {len(pages)} pages from {pdf_path} to {output_folder}")
+        print(f"Successfully converted {total_pages} pages from {pdf_path} to {output_folder}")
 
     except Exception as e:
         print(f"Error converting PDF to WebP: {e}")

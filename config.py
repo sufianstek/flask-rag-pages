@@ -18,9 +18,9 @@ OPENAI_API_KEY = ''
 OPENAI_MODEL = 'gpt-4.1-mini'
 OPENAI_EMBED_MODEL = 'text-embedding-3-small'
 
-#make sure install ollama and pull qwen2.5:latest and nomic-embed-text models before using Ollama provider.
-OLLAMA_MODEL = 'qwen2.5:latest'
-OLLAMA_EMBED_MODEL = 'nomic-embed-text'
+#make sure install ollama and pull qwen3.5:2b and nomic-embed-text models before using Ollama provider.
+OLLAMA_MODEL = 'qwen3:latest'
+OLLAMA_EMBED_MODEL =  'qwen3-embedding:latest' #'nomic-embed-text'
 OLLAMA_BASE_URL = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434').strip()
 
 CHAT_RAG_TOP_K = 3
