@@ -44,7 +44,7 @@ pip install -r requirements.txt
 set API_KEY in config.py
 if no API_KEY was set, default to Ollama
 
-## Get API or Set up Ollama
+### Get API or Set up Ollama
 
 1. Gemini API key https://aistudio.google.com/
 2. OpenAI API key https://platform.openai.com/api-keys
