@@ -49,25 +49,6 @@ Generated outputs:
 - Page images: `static/pages/<pdf_name>_pages/*.webp`
 - Vectors: `vector_store/*.index.faiss` + metadata
 
-## CLI Commands
-
-- `flask --app app ingest-pdf`
-- `RAG_QUERY="..." RAG_TOP_K=5 flask --app app rag-search`
-
-## API
-
-- `POST /api/rag/ingest`
-- `POST /api/rag/search`
-- `POST /api/chat`
-- `POST /api/chat/stream`
-
-Example:
-
-```bash
-curl -X POST http://127.0.0.1:5000/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message":"Summarize first-line treatment","history":[],"top_k":3,"use_context":true}'
-```
 
 ## Notes
 
