@@ -9,6 +9,7 @@
 		body {
 			background: linear-gradient(120deg, #f6f8fb, #eaf1f9 50%, #f7f3ec);
 			min-height: 100vh;
+			padding-bottom: 74px;
 		}
 
 		.page-title {
@@ -39,6 +40,29 @@
 			width: 100%;
 			height: 100%;
 			object-fit: cover;
+		}
+
+		.chat-sticky-bar {
+			position: fixed;
+			left: 0;
+			right: 0;
+			bottom: 0;
+			z-index: 1100;
+			background: rgba(33, 37, 41, 0.95);
+			padding: 0.5rem 0.75rem;
+			border-top: 1px solid rgba(255, 255, 255, 0.1);
+		}
+
+		.chat-sticky-inner {
+			max-width: 900px;
+			margin: 0 auto;
+			display: flex;
+			gap: 0.5rem;
+			align-items: center;
+		}
+
+		.chat-sticky-inner input {
+			min-width: 0;
 		}
 
 	</style>
@@ -80,6 +104,34 @@
 		</div>
 		{% endif %}
 	</main>
+
+	<div class="chat-sticky-bar">
+		<form id="index-chat-form" class="chat-sticky-inner">
+			<input id="index-chat-input" class="form-control" type="text" placeholder="Ask in AI chat..." autocomplete="off">
+			<input id="index-context-toggle" class="btn-check" type="checkbox" autocomplete="off" checked>
+			<label id="context-toggle-label" class="btn btn-outline-light" for="index-context-toggle" title="Use retrieval context">Context</label>
+			<button class="btn btn-primary" type="submit">Chat</button>
+		</form>
+	</div>
+
+	<script>
+		document.getElementById('index-chat-form').addEventListener('submit', function(event) {
+			event.preventDefault();
+			var prompt = (document.getElementById('index-chat-input').value || '').trim();
+			var useContext = document.getElementById('index-context-toggle').checked;
+			var target = '{{ url_for("chat_page") }}';
+			if (!useContext) {
+				target += '?context=0';
+			}
+			if (prompt) {
+				target += (useContext ? '?' : '&') + 'q=' + encodeURIComponent(prompt) + '&submit=1';
+			}
+			if (target !== '{{ url_for("chat_page") }}') {
+				window.location.href = target;
+			}
+		});
+	</script>
+
 	<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js" integrity="sha384-w76AqPfDkMBDXo30jS1Sgez6pr3x5MlQ1ZAGC+nuZB+EYdgRZgiwxhTBTkF7CXvN" crossorigin="anonymous"></script>
 </body>
 </html>
