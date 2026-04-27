@@ -14,6 +14,7 @@ from config import (
     GEMINI_EMBED_MODEL,
     OLLAMA_EMBED_MODEL,
     OLLAMA_BASE_URL,
+    OLLAMA_NUM_GPU,
     OPENAI_EMBED_MODEL,
 )
 
@@ -179,6 +180,9 @@ def _embed_texts_ollama(texts: List[str], model_name: str) -> np.ndarray:
             json={
                 'model': model_name,
                 'prompt': text,
+                'options': {
+                    'num_gpu': OLLAMA_NUM_GPU,
+                },
             },
             timeout=120,
         )

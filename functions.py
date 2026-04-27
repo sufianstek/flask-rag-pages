@@ -12,6 +12,8 @@ from config import (
     OPENAI_MODEL,
     OLLAMA_MODEL,
     OLLAMA_BASE_URL,
+    OLLAMA_NUM_CTX,
+    OLLAMA_NUM_GPU,
 )
 
 
@@ -317,6 +319,10 @@ def _ollama_generate_reply(message: str, history: list[dict] | None = None) -> t
             'model': OLLAMA_MODEL,
             'messages': messages,
             'stream': False,
+            'options': {
+                'num_ctx': OLLAMA_NUM_CTX,
+                'num_gpu': OLLAMA_NUM_GPU,
+            },
         },
         timeout=120,
     )
@@ -346,6 +352,10 @@ def _ollama_stream_reply(message: str, history: list[dict] | None = None) -> Gen
             'model': OLLAMA_MODEL,
             'messages': messages,
             'stream': True,
+            'options': {
+                'num_ctx': OLLAMA_NUM_CTX,
+                'num_gpu': OLLAMA_NUM_GPU,
+            },
         },
         timeout=300,
         stream=True,

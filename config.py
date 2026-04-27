@@ -18,9 +18,18 @@ OPENAI_API_KEY = ''
 OPENAI_MODEL = 'gpt-4.1-mini'
 OPENAI_EMBED_MODEL = 'text-embedding-3-small'
 
-#make sure install ollama and pull qwen3.5:2b and nomic-embed-text models before using Ollama provider.
-OLLAMA_MODEL = 'qwen3:latest'
-OLLAMA_EMBED_MODEL =  'qwen3-embedding:latest' #'nomic-embed-text'
+# Make sure to install Ollama and run: ollama pull qwen2.5:7b && ollama pull nomic-embed-text
+# qwen2.5:7b  : ~4.7 GB VRAM (Q4_K_M), excellent reasoning-to-latency ratio within 12 GB budget
+# qwen2.5:14b : ~8.5 GB VRAM (Q4_K_M), better reasoning, still fits in 12 GB with num_ctx ≤ 4096
+# nomic-embed-text: 274 MB, 768-dim, very fast; alternative: mxbai-embed-large (670 MB, 1024-dim)
+OLLAMA_MODEL = 'qwen2.5:7b'
+OLLAMA_EMBED_MODEL = 'nomic-embed-text'
 OLLAMA_BASE_URL = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434').strip()
+# GPU VRAM budget: 12 GB
+# num_ctx controls KV-cache size (the main variable VRAM cost beyond model weights).
+# 8192 tokens ≈ 1-2 GB KV-cache for 7B; total ≈ 6-7 GB, well within 12 GB.
+OLLAMA_NUM_CTX = 8192
+# -1 = offload all layers to GPU (Ollama will auto-cap to available VRAM); set 0 to force CPU.
+OLLAMA_NUM_GPU = -1
 
 CHAT_RAG_TOP_K = 3
