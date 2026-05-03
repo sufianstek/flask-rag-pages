@@ -57,6 +57,21 @@
       height: 32px;
       object-fit: contain;
     }
+    .suggested-questions {
+      margin-top: .6rem;
+      text-align: left;
+      max-width: 85%;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .suggested-question-send {
+      display: block;
+      width: 100%;
+      text-align: left;
+      margin-bottom: .35rem;
+      white-space: normal;
+      word-break: break-word;
+    }
   </style>
 </head>
 <body>
@@ -277,6 +292,68 @@
       return `${prefix}${trimmedPreview}…`;
     }
 
+    function extractSuggestedQuestions(text) {
+      const normalizedText = String(text || '').replace(/\r\n/g, '\n');
+      if (!normalizedText) return [];
+
+      const lines = normalizedText.split('\n');
+      const headingIndex = lines.findIndex((line) => /^\s*suggested questions\s*:?\s*$/i.test(line));
+      if (headingIndex === -1) return [];
+
+      const questions = [];
+      const seen = new Set();
+      for (let i = headingIndex + 1; i < lines.length; i += 1) {
+        const line = lines[i];
+        const match = line.match(/^\s*(?:\d+[.)]|[-*])\s+(.+?)\s*$/);
+        if (!match) {
+          if (questions.length > 0 && String(line || '').trim() === '') {
+            break;
+          }
+          continue;
+        }
+
+        const question = String(match[1] || '').trim();
+        const key = question.toLowerCase();
+        if (!question || seen.has(key)) continue;
+        seen.add(key);
+        questions.push(question);
+      }
+
+      return questions;
+    }
+
+    function submitSuggestedQuestion(question) {
+      const nextQuestion = String(question || '').trim();
+      if (!nextQuestion || sendBtn.disabled) return;
+      input.value = nextQuestion;
+      form.requestSubmit();
+    }
+
+    function appendSuggestedQuestionActions(parentRow, fullText) {
+      const questions = extractSuggestedQuestions(fullText);
+      if (!questions.length) return;
+
+      const container = document.createElement('div');
+      container.className = 'suggested-questions';
+
+      const title = document.createElement('div');
+      title.className = 'small text-muted mb-1';
+      title.textContent = 'Suggested follow-up questions';
+      container.appendChild(title);
+
+      questions.forEach((question, index) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'btn btn-outline-primary btn-sm suggested-question-send';
+        button.textContent = `${index + 1}. ${question}`;
+        button.addEventListener('click', () => submitSuggestedQuestion(question));
+        container.appendChild(button);
+      });
+
+      parentRow.appendChild(container);
+      chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
     sourcePrevBtn.addEventListener('click', () => {
       goToPreviousSourcePage();
     });
@@ -308,6 +385,10 @@
       bubble.textContent = text;
 
       row.appendChild(bubble);
+
+      if (role === 'assistant') {
+        appendSuggestedQuestionActions(row, text);
+      }
 
       if (role === 'assistant' && Array.isArray(contexts) && contexts.length > 0) {
         const sources = document.createElement('div');
@@ -449,6 +530,9 @@
 
           row.appendChild(sources);
           chatBox.scrollTop = chatBox.scrollHeight;
+        },
+        addSuggestedQuestionButtons(fullReplyText = '') {
+          appendSuggestedQuestionActions(row, fullReplyText);
         }
       };
     }
@@ -520,6 +604,7 @@
                     : {};
                   await assistantMessage.waitForDrain();
                   assistantMessage.addModelInfo(modelInfo);
+                  assistantMessage.addSuggestedQuestionButtons(reply);
                   assistantMessage.addSources(contexts);
                   history.push({ role: 'assistant', content: reply.trim() });
                   streamDone = true;
