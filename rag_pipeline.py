@@ -15,6 +15,7 @@ from config import (
     OLLAMA_EMBED_MODEL,
     OLLAMA_BASE_URL,
     OPENAI_EMBED_MODEL,
+    OLLAMA_KEEP_ALIVE
 )
 
 
@@ -179,6 +180,7 @@ def _embed_texts_ollama(texts: List[str], model_name: str) -> np.ndarray:
             json={
                 'model': model_name,
                 'prompt': text,
+                'keep_alive': OLLAMA_KEEP_ALIVE,
             },
             timeout=120,
         )

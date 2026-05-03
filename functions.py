@@ -12,6 +12,7 @@ from config import (
     OPENAI_MODEL,
     OLLAMA_MODEL,
     OLLAMA_BASE_URL,
+    OLLAMA_KEEP_ALIVE,
 )
 
 
@@ -81,6 +82,21 @@ def _get_openai_base_url() -> str:
     return os.getenv('OPENAI_BASE_URL', 'https://api.openai.com/v1').strip().rstrip('/')
 
 
+def _build_ollama_chat_payload(messages: list[dict], stream: bool) -> dict:
+    payload = {
+        'model': OLLAMA_MODEL,
+        'messages': messages,
+        'stream': stream,
+    }
+
+    # Ollama /api/chat may reject keep_alive='-1' on some versions.
+    keep_alive = str(OLLAMA_KEEP_ALIVE or '').strip()
+    if keep_alive and keep_alive != '-1':
+        payload['keep_alive'] = keep_alive
+
+    return payload
+
+
 
 def _get_active_provider() -> str:
     if _load_gemini_api_key():
@@ -112,8 +128,13 @@ def _build_rag_prompt(message: str, contexts: list[dict]) -> str:
     return (
         'You must answer strictly and only from the provided PDF context below. '
         'Do not use outside knowledge, assumptions, training data, or prior conversation. '
-        'If the answer is not explicitly supported by the context, reply exactly: '
-        '"The document does not provide this information."\n\n'
+        'If the answer is not explicitly supported by the context, do NOT say the answer is unavailable. '
+        'Instead, respond with:\n'
+        '"Suggested questions:\n" '
+        'followed by 2 suggested questions (as a numbered list) that CAN be answered from the provided PDF context. '
+        'Base the suggested questions only on topics and facts present in the context chunks.\n'
+        'Always format your answer using bullet points or numbered lists. '
+        'Use short, concise point-form sentences. Avoid long paragraphs.\n\n'
         f'PDF Context:\n{context_block}\n\n'
         f'User Question: {message}'
     )
@@ -313,11 +334,7 @@ def _ollama_generate_reply(message: str, history: list[dict] | None = None) -> t
 
     response = requests.post(
         f'{OLLAMA_BASE_URL.rstrip("/")}/api/chat',
-        json={
-            'model': OLLAMA_MODEL,
-            'messages': messages,
-            'stream': False,
-        },
+        json=_build_ollama_chat_payload(messages=messages, stream=False),
         timeout=120,
     )
     response.raise_for_status()
@@ -342,11 +359,7 @@ def _ollama_stream_reply(message: str, history: list[dict] | None = None) -> Gen
 
     with requests.post(
         f'{OLLAMA_BASE_URL.rstrip("/")}/api/chat',
-        json={
-            'model': OLLAMA_MODEL,
-            'messages': messages,
-            'stream': True,
-        },
+        json=_build_ollama_chat_payload(messages=messages, stream=True),
         timeout=300,
         stream=True,
     ) as response:

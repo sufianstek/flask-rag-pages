@@ -120,6 +120,13 @@ def _parse_bool(value: object, default: bool = True) -> bool:
     return default
 
 
+def _format_exception_message(exc: Exception, fallback: str) -> str:
+    detail = str(exc).strip()
+    if detail:
+        return detail
+    return f'{fallback} ({exc.__class__.__name__})'
+
+
 def _list_current_pdf_paths() -> list[str]:
     return [str(p) for p in sorted(PDF_DIR.glob('*.pdf'))]
 
@@ -260,7 +267,11 @@ def chat_api():
     except ValueError as exc:
         return jsonify({'status': 'error', 'message': str(exc)}), 400
     except Exception as exc:
-        return jsonify({'status': 'error', 'message': f'Upstream request failed: {exc}'}), 502
+        app.logger.exception('Chat request failed')
+        return jsonify({
+            'status': 'error',
+            'message': f'Upstream request failed: {_format_exception_message(exc, "Unexpected error")}',
+        }), 502
 
     return jsonify({
         'status': 'ok',
@@ -335,7 +346,11 @@ def chat_api_stream():
         except ValueError as exc:
             yield _sse_message({'type': 'error', 'message': str(exc)})
         except Exception as exc:
-            yield _sse_message({'type': 'error', 'message': f'Unexpected server error: {exc}'})
+            app.logger.exception('Streaming chat request failed')
+            yield _sse_message({
+                'type': 'error',
+                'message': f'Unexpected server error: {_format_exception_message(exc, "Unexpected error")}',
+            })
 
     return Response(generate(), mimetype='text/event-stream')
 
@@ -382,4 +397,4 @@ def rag_search_command():
     print(json.dumps(results, indent=2, ensure_ascii=False))
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8000, debug=False)
+    app.run(host='0.0.0.0', port=8000, debug=True)
