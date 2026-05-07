@@ -24,6 +24,8 @@ from functions import (
     _generate_reply,
     _stream_reply,
     _sse_message,
+    _warmup_ollama_model,
+    _get_active_provider,
 )
 from rag_pipeline import ingest_multiple_pdfs, search_vectors
 from pdf_to_webp import convert_all_pdfs
@@ -395,6 +397,10 @@ def rag_search_command():
         top_k=top_k,
     )
     print(json.dumps(results, indent=2, ensure_ascii=False))
+
+# Pre-load Ollama model into memory when it is the active provider.
+if _get_active_provider() == 'ollama':
+    _warmup_ollama_model()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000, debug=True)

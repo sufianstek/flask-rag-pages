@@ -180,7 +180,7 @@ def _embed_texts_ollama(texts: List[str], model_name: str) -> np.ndarray:
             json={
                 'model': model_name,
                 'prompt': text,
-                'keep_alive': OLLAMA_KEEP_ALIVE,
+                'keep_alive': "24h",
             },
             timeout=120,
         )

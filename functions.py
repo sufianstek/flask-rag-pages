@@ -134,7 +134,7 @@ def _build_rag_prompt(message: str, contexts: list[dict]) -> str:
         'followed by 2 suggested questions (as a numbered list) that CAN be answered from the provided PDF context. '
         'Base the suggested questions only on topics and facts present in the context chunks.\n'
         'Always format your answer using bullet points or numbered lists. '
-        'Use short, concise point-form sentences. Avoid long paragraphs.\n\n'
+        'Use concise point-form sentences..\n\n'
         f'PDF Context:\n{context_block}\n\n'
         f'User Question: {message}'
     )
@@ -452,3 +452,20 @@ def _stream_reply(message: str, history: list[dict] | None = None) -> Generator[
 
 def _sse_message(payload: dict) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _warmup_ollama_model() -> None:
+    """Pre-load the Ollama model into memory by calling /api/generate with keep_alive=-1."""
+    import logging
+    import threading
+
+    def _do_warmup() -> None:
+        try:
+            url = f'{OLLAMA_BASE_URL}/api/generate'
+            requests.post(url, json={'model': OLLAMA_MODEL, 'keep_alive': -1}, timeout=60)
+            logging.getLogger(__name__).info('Ollama model "%s" warmed up.', OLLAMA_MODEL)
+        except Exception as exc:
+            logging.getLogger(__name__).warning('Ollama warmup failed: %s', exc)
+
+    thread = threading.Thread(target=_do_warmup, daemon=True, name='ollama-warmup')
+    thread.start()
