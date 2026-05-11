@@ -10,7 +10,6 @@ from flask import (
     redirect,
     render_template,
     request,
-    send_from_directory,
     stream_with_context,
     url_for,
 )
@@ -38,9 +37,8 @@ PAGES_ROOT = Path(app.static_folder) / 'pages'
 DOC_TITLE_OVERRIDES = {
     'cpg_stemi': 'CPG STEMI',
     'etdhtaa_medication_protocol': 'ETDHTAA Medication Protocol',
-    'paedsprotocolv5': 'Paeds Protocol MY',
     'oscc': 'OSCC',
-    'Tintinallis_Emergency_Medicine': "Tintinalli's Emergency Medicine",
+    'Tintinallis_Emergency_Medicine_Manual_7e_2012': "Tintinalli's Emergency Medicine",
 }
 
 
@@ -163,14 +161,6 @@ def etdhtaa():
     return redirect(url_for('document_pages', doc_id='etdhtaa_medication_protocol'))
 
 
-@app.route('/paedsprotocolv5')
-def paedsprotocolv5():
-    return redirect(url_for('document_pages', doc_id='paedsprotocolv5'))
-
-@app.route('/paeds_pdf')
-def paeds_pdf():
-    return send_from_directory(app.static_folder, 'paedsprotocolv5.pdf')
-
 
 @app.route('/api/rag/ingest', methods=['POST'])
 def ingest_pdf():
@@ -199,6 +189,9 @@ def rag_search():
     top_k = int(payload.get('top_k', 5))
     doc_id = (payload.get('doc_id') or '').strip() or None
     use_context = _parse_bool(payload.get('use_context'), default=True)
+    method = (payload.get('method') or 'hybrid').strip().lower()
+    if method not in {'vector', 'bm25', 'hybrid'}:
+        method = 'hybrid'
 
     if not query:
         return jsonify({'status': 'error', 'message': 'query is required'}), 400
@@ -215,6 +208,7 @@ def rag_search():
             output_dir=str(VECTOR_DIR),
             top_k=top_k,
             index_names=index_names,
+            method=method,
         )
     return jsonify({
         'status': 'ok',
@@ -222,6 +216,7 @@ def rag_search():
         'top_k': top_k,
         'doc_id': doc_id,
         'use_context': use_context,
+        'method': method,
         'results': results,
     })
 
@@ -234,6 +229,9 @@ def chat_api():
     top_k = int(payload.get('top_k', CHAT_RAG_TOP_K))
     doc_id = (payload.get('doc_id') or '').strip() or None
     use_context = _parse_bool(payload.get('use_context'), default=True)
+    method = (payload.get('method') or 'hybrid').strip().lower()
+    if method not in {'vector', 'bm25', 'hybrid'}:
+        method = 'hybrid'
 
     if not message:
         return jsonify({'status': 'error', 'message': 'message is required'}), 400
@@ -258,6 +256,7 @@ def chat_api():
                 output_dir=str(VECTOR_DIR),
                 top_k=top_k,
                 index_names=index_names,
+                method=method,
             )
             grounded_message = _build_rag_prompt(message=message, contexts=contexts)
         reply, model_info = _generate_reply(message=grounded_message, history=history)
@@ -282,6 +281,7 @@ def chat_api():
         'model': model_info.get('model'),
         'doc_id': doc_id,
         'use_context': use_context,
+        'method': method,
         'contexts': contexts,
     })
 
@@ -294,6 +294,9 @@ def chat_api_stream():
     top_k = int(payload.get('top_k', CHAT_RAG_TOP_K))
     doc_id = (payload.get('doc_id') or '').strip() or None
     use_context = _parse_bool(payload.get('use_context'), default=True)
+    method = (payload.get('method') or 'hybrid').strip().lower()
+    if method not in {'vector', 'bm25', 'hybrid'}:
+        method = 'hybrid'
 
     if not message:
         return jsonify({'status': 'error', 'message': 'message is required'}), 400
@@ -320,6 +323,7 @@ def chat_api_stream():
                     output_dir=str(VECTOR_DIR),
                     top_k=top_k,
                     index_names=index_names,
+                    method=method,
                 )
                 grounded_message = _build_rag_prompt(message=message, contexts=contexts)
             model_info = {'provider': None, 'model': None}
@@ -337,6 +341,7 @@ def chat_api_stream():
                 'type': 'done',
                 'doc_id': doc_id,
                 'use_context': use_context,
+                'method': method,
                 'contexts': contexts,
                 'model_info': model_info,
             })
@@ -388,6 +393,10 @@ def rag_search_command():
         return
     query = os.getenv('RAG_QUERY', '').strip()
     top_k = int(os.getenv('RAG_TOP_K', '5'))
+    method = os.getenv('RAG_METHOD', 'hybrid').strip().lower()
+    if method not in {'vector', 'bm25', 'hybrid'}:
+        method = 'hybrid'
+    
     if not query:
         raise ValueError('Set RAG_QUERY environment variable to run rag-search')
 
@@ -395,6 +404,7 @@ def rag_search_command():
         query=query,
         output_dir=str(VECTOR_DIR),
         top_k=top_k,
+        method=method,
     )
     print(json.dumps(results, indent=2, ensure_ascii=False))
 

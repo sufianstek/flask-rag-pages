@@ -9,6 +9,7 @@ import numpy as np
 import requests
 from google import genai
 from pypdf import PdfReader
+from rank_bm25 import BM25Okapi
 
 from config import (
     GEMINI_EMBED_MODEL,
@@ -83,6 +84,77 @@ def _normalize_rows(vectors: np.ndarray) -> np.ndarray:
     norms = np.linalg.norm(vectors, axis=1, keepdims=True)
     norms = np.where(norms == 0, 1.0, norms)
     return vectors / norms
+
+
+def _tokenize_text(text: str) -> List[str]:
+    """Simple tokenization: lowercase and split on whitespace/punctuation."""
+    import re
+    # Convert to lowercase
+    text = text.lower()
+    # Split on whitespace and punctuation
+    tokens = re.findall(r'\b\w+\b', text)
+    return tokens
+
+
+def _save_bm25_index(bm25: BM25Okapi, corpus_tokens: List[List[str]], filepath: str) -> None:
+    """Save BM25 index and tokenized corpus to disk."""
+    data = {
+        'corpus_tokens': corpus_tokens,
+        'idf': bm25.idf,
+        'doc_freqs': bm25.doc_freqs,
+        'avgdl': bm25.avgdl,
+    }
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _load_bm25_index(filepath: str) -> tuple[BM25Okapi, List[List[str]]]:
+    """Load BM25 index and tokenized corpus from disk."""
+    with open(filepath, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    
+    corpus_tokens = data['corpus_tokens']
+    bm25 = BM25Okapi(corpus_tokens)
+    # Restore the pre-computed statistics
+    bm25.idf = data['idf']
+    bm25.doc_freqs = data['doc_freqs']
+    bm25.avgdl = data['avgdl']
+    
+    return bm25, corpus_tokens
+
+
+def _search_bm25(
+    query: str,
+    bm25: BM25Okapi,
+    corpus_tokens: List[List[str]],
+    chunks: List[Dict[str, Any]],
+    top_k: int = 5,
+) -> List[Dict[str, Any]]:
+    """Search using BM25 and return top-k results."""
+    query_tokens = _tokenize_text(query)
+    scores = bm25.get_scores(query_tokens)
+    
+    # Get top-k indices
+    top_indices = np.argsort(scores)[::-1][:top_k]
+    
+    results = []
+    for rank, idx in enumerate(top_indices, start=1):
+        if idx < 0 or idx >= len(chunks):
+            continue
+        chunk = chunks[idx]
+        chunk_text = str(chunk.get('chunk', ''))
+        score = float(scores[idx]) if idx < len(scores) else 0.0
+        
+        results.append({
+            'rank': rank,
+            'score': score,
+            'source': 'bm25',
+            'page': chunk.get('page'),
+            'chunk': chunk_text,
+            'preview': chunk_text[:200],
+        })
+    
+    return results
 
 
 def _load_gemini_key() -> str:
@@ -299,9 +371,10 @@ def ingest_pdf_to_vectors(
 
     index_path = out / f"{pdf.stem}.index.faiss"
     metadata_path = out / f"{pdf.stem}.metadata.json"
+    bm25_path = out / f"{pdf.stem}.bm25.json"
 
     # If vectors for this PDF already exist, reuse them instead of re-ingesting.
-    if index_path.exists() and metadata_path.exists():
+    if index_path.exists() and metadata_path.exists() and bm25_path.exists():
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         chunks = metadata.get("chunks", [])
         if not isinstance(chunks, list):
@@ -343,6 +416,8 @@ def ingest_pdf_to_vectors(
         raise ValueError("No text chunks generated from PDF")
 
     chunk_texts = [str(item["chunk"]) for item in records]
+    
+    # Embed vectors using the selected provider
     vectors, selected_provider, selected_model = _embed_texts(
         texts=chunk_texts,
         model_name=model_name,
@@ -359,6 +434,11 @@ def ingest_pdf_to_vectors(
     index.add(np.asarray(vectors, dtype=np.float32))
 
     faiss.write_index(index, str(index_path))
+
+    # Create BM25 index
+    corpus_tokens = [_tokenize_text(text) for text in chunk_texts]
+    bm25 = BM25Okapi(corpus_tokens)
+    _save_bm25_index(bm25, corpus_tokens, str(bm25_path))
 
     metadata = {
         "pdf": str(pdf),
@@ -419,6 +499,7 @@ def search_vectors(
     gemini_api_key: str = "",
     index_names: Optional[List[str]] = None,
     openai_api_key: str = "",
+    method: str = "hybrid",
 ) -> List[Dict[str, Any]]:
     """Search across one or more vector indexes.
 
@@ -431,6 +512,7 @@ def search_vectors(
         openai_api_key: OpenAI API key.
         index_names: List of index stems to search (e.g. ['paedsprotocolv5']).
                      When None (default), all indexes in output_dir are searched.
+        method: Search method - "vector", "bm25", or "hybrid".
     """
     if not query or not query.strip():
         raise ValueError("query must not be empty")
@@ -448,47 +530,89 @@ def search_vectors(
     if not names:
         raise FileNotFoundError("No vector indexes found. Run ingest first.")
 
-    # Embed the query once
-    query_vector, _, _ = _embed_texts(
-        texts=[query],
-        model_name=model_name,
-        gemini_api_key=gemini_api_key,
-        openai_api_key=openai_api_key,
-    )
-    query_vector = _normalize_rows(query_vector.astype(np.float32))
-
     all_hits: List[Dict[str, Any]] = []
 
-    for name in names:
-        index_path = out / f"{name}.index.faiss"
-        metadata_path = out / f"{name}.metadata.json"
+    if method in ("vector", "hybrid"):
+        # Embed the query once
+        query_vector, _, _ = _embed_texts(
+            texts=[query],
+            model_name=model_name,
+            gemini_api_key=gemini_api_key,
+            openai_api_key=openai_api_key,
+        )
+        query_vector = _normalize_rows(query_vector.astype(np.float32))
 
-        if not index_path.exists() or not metadata_path.exists():
-            continue
+        for name in names:
+            index_path = out / f"{name}.index.faiss"
+            metadata_path = out / f"{name}.metadata.json"
 
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        chunks = metadata.get("chunks", [])
-        if not isinstance(chunks, list) or not chunks:
-            continue
-
-        index = faiss.read_index(str(index_path))
-        k = min(top_k, len(chunks))
-        scores, ids = index.search(query_vector, k)
-
-        for score, idx in zip(scores[0], ids[0]):
-            if idx < 0 or idx >= len(chunks):
+            if not index_path.exists() or not metadata_path.exists():
                 continue
-            chunk = chunks[idx]
-            chunk_text = str(chunk.get("chunk", ""))
-            all_hits.append(
-                {
-                    "score": float(score),
-                    "source": name,
-                    "page": chunk.get("page"),
-                    "chunk": chunk_text,
-                    "preview": chunk_text[:200],
-                }
-            )
+
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            chunks = metadata.get("chunks", [])
+            if not isinstance(chunks, list) or not chunks:
+                continue
+
+            index = faiss.read_index(str(index_path))
+            k = min(top_k, len(chunks))
+            scores, ids = index.search(query_vector, k)
+
+            for score, idx in zip(scores[0], ids[0]):
+                if idx < 0 or idx >= len(chunks):
+                    continue
+                chunk = chunks[idx]
+                chunk_text = str(chunk.get("chunk", ""))
+                all_hits.append(
+                    {
+                        "score": float(score),
+                        "source": name,
+                        "page": chunk.get("page"),
+                        "chunk": chunk_text,
+                        "preview": chunk_text[:200],
+                        "method": "vector",
+                    }
+                )
+
+    if method in ("bm25", "hybrid"):
+        for name in names:
+            bm25_path = out / f"{name}.bm25.json"
+            metadata_path = out / f"{name}.metadata.json"
+
+            if not bm25_path.exists() or not metadata_path.exists():
+                continue
+
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            chunks = metadata.get("chunks", [])
+            if not isinstance(chunks, list) or not chunks:
+                continue
+
+            try:
+                bm25, corpus_tokens = _load_bm25_index(str(bm25_path))
+                bm25_results = _search_bm25(query, bm25, corpus_tokens, chunks, top_k)
+                
+                for result in bm25_results:
+                    result["source"] = name
+                    result["method"] = "bm25"
+                    all_hits.append(result)
+            except Exception:
+                # If BM25 index fails, skip it
+                continue
+
+    if method == "hybrid":
+        # Deduplicate and re-rank by combining scores
+        # Group by source and chunk text
+        seen = {}
+        for hit in all_hits:
+            key = (hit["source"], hit["chunk"])
+            if key not in seen:
+                seen[key] = {**hit, "methods": [hit["method"]], "score": hit["score"]}
+            else:
+                # Average scores from different methods
+                seen[key]["methods"].append(hit["method"])
+                seen[key]["score"] = (seen[key]["score"] + hit["score"]) / 2
+
+        all_hits = list(seen.values())
 
     # Sort by score descending, keep top_k, assign ranks
     all_hits.sort(key=lambda h: h["score"], reverse=True)
